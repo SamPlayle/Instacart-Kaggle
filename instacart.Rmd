@@ -11,4 +11,69 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Introduction
 
+This analysis is based on Instacart's dataset of 3 million anonymized orders, which is discussed in a blog post here: https://tech.instacart.com/3-million-instacart-orders-open-sourced-d40d29ead6f2
+
+The goal of the Kaggle competition is to predict which items, from among those previously purchased, will be included in a customer's next order. 
+https://www.kaggle.com/c/instacart-market-basket-analysis
+
+
+
 ## Exploratory analysis
+
+### Data
+
+The data comprise five .csv files.
+```{r echo = T}
+data <- list.files("../Data")
+data
+```
+
+
+Let's have a look at them. The first (alphabetically) is `aisles.csv`.
+```{r echo = T}
+aisles <- read.csv("../Data/aisles.csv")
+dim(aisles)
+head(aisles)
+```
+
+We see there are 134 "aisles", each of which corresponds to a different collection of groceries. 
+
+The next .csv file is `departments.csv`.
+```{r echo = T}
+depts <- read.csv("../Data/departments.csv")
+dim(depts)
+head(depts)
+```
+
+So there are 21 departments.
+
+Next we have the biggest .csv files. `order_products__prior.csv` contains previous order contents for all customers. 
+
+
+```{r echo = T}
+opp <- read.csv(file = "../Data/order_products__prior.csv")
+dim(opp)
+head(opp)
+```
+
+
+```{r echo = T}
+opt <- read.csv(file = "../Data/order_products__train.csv")
+dim(opt)
+head(opt)
+```
+
+
+```{r echo = T}
+orders <- read.csv(file = "../Data/orders.csv")
+dim(orders)
+head(orders)
+```
+
+```{r echo = T}
+products <- read.csv(file = "../Data/products.csv")
+dim(products)
+head(products)
+```
+
+
