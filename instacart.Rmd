@@ -49,13 +49,15 @@ So there are 21 departments.
 
 Next we have the biggest .csv files. `order_products__prior.csv` contains previous order contents for all customers. 
 
-
 ```{r echo = T}
 opp <- read.csv(file = "../Data/order_products__prior.csv")
 dim(opp)
 head(opp)
 ```
 
+So there are 32,434,489 data points in the prior order dataset. For each data point, we get the `order_ID` telling us which particular order the data point corresponds to; `product_ID` telling us which type of product that data point is, `add_to_cart_order` telling us at which point in carrying out the order was the item chosen, and `reordered` which tells us whether or not the customer had previously ordered the item.
+
+Next let's have a look at the `order_products__train.csv' file.
 
 ```{r echo = T}
 opt <- read.csv(file = "../Data/order_products__train.csv")
@@ -63,6 +65,9 @@ dim(opt)
 head(opt)
 ```
 
+We see it contains 1,384,617 observations. The columns are the same as in the `order_products__prior.csv` file.
+
+The `orders.csv' file tells us information about the orders, including which dataset (prior, training or test) it belongs to. 
 
 ```{r echo = T}
 orders <- read.csv(file = "../Data/orders.csv")
@@ -70,10 +75,155 @@ dim(orders)
 head(orders)
 ```
 
+We see there are 3,421,083 orders in the dataset. Each one has a `user_id`, an `order_number`, an weekday `order_dow` and time `order_hour_of_day` for the order, and `days_since_prior_order`, i.e. how long it has been since the user's previous order.
+
+The number of unique users is about 200 thousand:
+```{r echo = T}
+length(
+  unique(
+    orders$user_id
+    )
+  )
+```
+
+Finally let's have a look at the `products.csv` file:  
+
 ```{r echo = T}
 products <- read.csv(file = "../Data/products.csv")
 dim(products)
 head(products)
 ```
 
+There are 49,688 different products; for each one as well as a `product_id` we get a `product_name`, an `aisle_id` and a `department_id`.
+
+### Output
+
+Let's have a look at the sample submission to see what format our output should be in: 
+
+```{r echo = T}
+sampsub <- read.csv(file = "../Data/sample_submission.csv", stringsAsFactors = F)
+dim(sampsub)
+head(sampsub)
+```
+
+We see that there are 75,000 rows with two columns. The first column is the order ID; so the idea is that given the order ID we should predict which products are included (from among those that the customer has previously ordered). The ordered products should be given as a space-separated list. It's possible that no repeat products were ordered; in this case the submitted answer for "products"" should be "None". https://www.kaggle.com/c/instacart-market-basket-analysis#evaluation
+
+In the sample submission, every basket is identical.
+```{r echo = T}
+all(sampsub$products==sampsub$products[1])
+```
+
+Let's see what products are in the sample basket by subsetting the `products` dataframe to just the rows with these two product IDs: 
+```{r echo = T}
+sampbasket <- as.numeric(strsplit(sampsub$products[1],"\\ ")[[1]])
+
+products[
+  products[,"product_id"] %in% sampbasket
+  ,]
+```
+
+This explains why they chose the name "Going Bananas Benchmark"!
+
+The scores will be computed from the mean F1 score. This is defined as
+$$
+F_1 = 2 \cdot \frac{p \cdot r }{p + r} \, , 
+$$
+
+where $p$ is the *precision*, i.e. the number of correct product IDs divided by the number of product IDs submitted, and $r$ is the *recall*, i.e. the number of correct product IDs divided by the number of product IDs that there should have been.
+
+### Partitioning off a validation set
+
+Let's split a dataset off of the training set to give us an estimated out-of-sample error rate of our analysis. We should not use the validation set for any training or preliminary investigation. 
+
+Let's get the IDs of the orders that are in the training set, and sample 20% of them as a validation set.
+
+```{r echo = T}
+trainorders <- orders[(orders$eval_set=="train"),"order_id"]
+set.seed(9383)
+intrain <- as.logical(
+  rbinom(
+    n = length(trainorders), 
+    size = 1, 
+    prob = 0.8
+    )
+  )
+trainingIDs <- trainorders[intrain]
+validationIDs <- trainorders[!intrain]
+length(trainingIDs)
+length(validationIDs)
+```
+
+Now we can set up a function to evaluate how accurate our attempts are. Let's assign the "going bananas benchmark" to our validation set. 
+
+```{r echo = T}
+valsample <- data.frame(order_id = validationIDs, products = sampsub[1,2])
+valsample[,2] <- as.character(valsample[,2])
+head(valsample)
+```
+
+To evaluate this, we need to find the "ground truth" for our validation set. For each order number, we need to get a list of products which appear in that order *and* which are repeat orders. Let's write a function to do this:
+
+```{r echo = T}
+getrepeatbasket <- function(order_id){
+  orderprods <- opt[opt[,"order_id"]==order_id 
+                    & opt[,"reordered"],]
+  orderprods
+}
+
+listprods <- function(basket){
+  prodvec <- basket$product_id
+  spaced <- paste(prodvec, collapse = ' ')
+  spaced
+}
+
+orderprods <- function(order_id){
+  listprods(getrepeatbasket(order_id))
+}
+```
+
+This function takes as its arguments an order number and a prediction for which items will be contained in that order, and outputs the $F_1$ score of that prediction:
+
+```{r echo = R}
+f1order <- function(order_id, productguess){
+  pgsplit <- strsplit(productguess, split = " ")[[1]]
+  ptrue <- getrepeatbasket(order_id)$product_id
+  correct <- pgsplit %in% ptrue
+  p <- mean(correct)
+  r <- sum(correct) / length(ptrue)
+  ifelse(
+    p != 0 & r != 0,
+    2*p*r/(p+r),
+    0
+  )
+}
+```
+
+This function takes a data frame of order numbers and predicted products and outputs the mean $F_1$ score for the data frame.
+
+```{r echo = T}
+getf1 <- function(guessdf){
+  x <- NULL
+  for(i in 1:nrow(guessdf)){
+    # Uncomment for updates
+    # if(i %% 100 == 0) print(c(i, mean(x)))
+    f1 <- f1order(guessdf[[i,1]],guessdf[[i,2]])
+    x <- c(x, f1)
+  }
+  mean(x)
+}
+```
+
+Let's use the `getf1()` function on the validation set with the banana benchmark. The computation takes quite a long time so we will save the output after running it once. 
+
+```{r echo = T}
+if(!file.exists("validationbenchmark.rds")){
+  validationbenchmark <- getf1(valsample)
+  saveRDS(x, file = "validationbenchmark.rds")
+} else {
+  validationbenchmark <- readRDS("validationbenchmark.rds")
+}
+validationbenchmark
+```
+
+So the benchmark guess for the validation dataset is about 0.000521. On the other hand, the benchmark guess for the *test* dataset, available on the leaderboard at https://www.kaggle.com/c/instacart-market-basket-analysis/leaderboard , is 0.000545. These two scores are within 5% of each other, which is reassuring because it tells us that we are computing the $F_1$ score correctly, and that there is some consistent structure in the dataset for us to find as expected (i.e. the orders are not just random).
 
