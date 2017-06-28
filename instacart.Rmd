@@ -1,0 +1,14 @@
+---
+title: "Instacart Market Basket Analysis"
+author: "Sam Playle"
+date: "28 June 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+## Exploratory analysis
