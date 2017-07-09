@@ -9,6 +9,10 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+```{r echo = F, warning = F, message = F}
+library(dplyr); library(ggplot2)
+```
+
 ## Introduction
 
 This analysis is based on Instacart's dataset of 3 million anonymized orders, which is discussed in a blog post here: https://tech.instacart.com/3-million-instacart-orders-open-sourced-d40d29ead6f2
@@ -75,7 +79,7 @@ dim(orders)
 head(orders)
 ```
 
-We see there are 3,421,083 orders in the dataset. Each one has a `user_id`, an `order_number`, an weekday `order_dow` and time `order_hour_of_day` for the order, and `days_since_prior_order`, i.e. how long it has been since the user's previous order.
+We see there are 3,421,083 orders in the dataset. Each one has a `user_id`, an `order_number`, a weekday `order_dow` and time `order_hour_of_day` for the order, and `days_since_prior_order`, i.e. how long it has been since the user's previous order.
 
 The number of unique users is about 200 thousand:
 ```{r echo = T}
@@ -227,3 +231,54 @@ validationbenchmark
 
 So the benchmark guess for the validation dataset is about 0.000521. On the other hand, the benchmark guess for the *test* dataset, available on the leaderboard at https://www.kaggle.com/c/instacart-market-basket-analysis/leaderboard , is 0.000545. These two scores are within 5% of each other, which is reassuring because it tells us that we are computing the $F_1$ score correctly, and that there is some consistent structure in the dataset for us to find as expected (i.e. the orders are not just random).
 
+## Exploratory graphs
+
+```{r echo = F}
+library(ggplot2)
+```
+
+### Number of orders
+
+Let's have a look at how many orders there are per user, given by `table(orders$user_id)`. Let's plot a histogram:
+```{r echo = T}
+qplot(n, data = count(orders, user_id), bins = 97)
+```
+
+We can see that the number of orders in the dataset is between 4 and 100, as described. The count is strictly decreasing as a function of the number of orders, except at 100. This suggests that all customers with $\geq 100$ orders have been added into the 100 box.
+
+### Popular days to order
+
+We can plot this with
+```{r echo = T}
+qplot(as.factor(orders$order_dow))
+```
+This seems to show that days 0 and 1 are the most popular - suggesting that these two days might be weekend days.
+
+### Popular times of day to order
+
+We can see which times of day are popular to order with the following plot:
+```{r echo = T}
+qplot(as.factor(orders$order_hour_of_day), xlab = "Time of day")
+``` 
+This shows that the purchases peak once at 10a.m. and again at 3p.m.
+
+We've seen that whether or not it's a weekend (presuming this is what days "0" and "1" are) has a significant impact on the number of orders made. Does it also impact what time of days the orders are made? Apparently not:
+```{r echo = T}
+day.type <- with(orders, as.factor(order_dow == 0 | order_dow == 1))
+levels(daytype) <- c("Weekday", "Weekend")
+ggplot(orders, aes(order_hour_of_day, fill = day.type)) + labs(x = "Time of day") + geom_density(alpha = 0.2, adjust = 3)
+```
+
+### Number of days between orders
+
+```{r echo = T}
+qplot(days_since_prior_order, data = orders, xlab = "Days since prior order", bins = 30, na.rm = T)
+```
+
+This is obviously cut off at a maximum of 30 days, with any higher value counting as 30. The histogram seems to peak at 7 days, with further local maxima at other multiples of 7 days, suggesting that people tend to do their shopping at weekly intervals. 
+
+### Size of orders
+
+```{r echo = T}
+ordersizes = count(opp, order_id)
+```
