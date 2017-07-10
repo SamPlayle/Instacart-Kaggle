@@ -330,4 +330,34 @@ Now we need to apply the same manipulations automatically to the whole prior dat
 
 ```{r echo = T}
 practice <- data.frame(user_id = c(1,1,1,1,2,2,2,2,2), order_id = c(1,1,2,2,3,3,3,4,4), product_id = c(7,9,7,10,8,11,7,6,11))
+
+ordercount <- practice %>% group_by(user_id) %>% summarize(norders = n())
+
+practice %>% group_by(user_id, product_id) %>% summarize(count = n()) %>% inner_join(ordercount) %>% mutate(frac = count/norders) %>% filter(frac >= 0.5)
+```
+
+```{r echo = T}
+if(!file.exists("bench2.rds")){
+
+benchdat <- opp %>% inner_join(orders) %>% select(user_id, order_id, product_id)
+
+norders <- benchdat %>% group_by(user_id) %>% summarize(number_orders = n_distinct(order_id))
+
+bench2 <- benchdat %>% group_by(user_id, product_id) %>% summarize(count = n()) %>% inner_join(norders) %>% mutate(frac = count/number_orders) %>% select(user_id, product_id, frac) %>% filter(frac >= 0.5)
+
+saveRDS(bench2, file = "bench2.rds")
+} else {
+bench2 <- readRDS("bench2.rds")
+}
+```
+
+Putting the data in the right form:
+
+```{r echo = T}
+bench2form <- bench2 %>% group_by(user_id) %>% mutate(products = paste0(product_id, collapse = " ")) %>% select(user_id, products) %>% unique()
+```
+
+Now we need to use this to get predictions
+```{r echo = T}
+filter(orders, eval_set == "train") %>% left_join(bench2form) %>% select(order_id, products) %>% mutate(products = ifelse(is.na(products),"",products)) 
 ```
