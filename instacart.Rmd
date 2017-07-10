@@ -20,8 +20,6 @@ This analysis is based on Instacart's dataset of 3 million anonymized orders, wh
 The goal of the Kaggle competition is to predict which items, from among those previously purchased, will be included in a customer's next order. 
 https://www.kaggle.com/c/instacart-market-basket-analysis
 
-
-
 ## Exploratory analysis
 
 ### Data
@@ -233,10 +231,6 @@ So the benchmark guess for the validation dataset is about 0.000521. On the othe
 
 ## Exploratory graphs
 
-```{r echo = F}
-library(ggplot2)
-```
-
 ### Number of orders
 
 Let's have a look at how many orders there are per user, given by `table(orders$user_id)`. Let's plot a histogram:
@@ -265,7 +259,7 @@ This shows that the purchases peak once at 10a.m. and again at 3p.m.
 We've seen that whether or not it's a weekend (presuming this is what days "0" and "1" are) has a significant impact on the number of orders made. Does it also impact what time of days the orders are made? Apparently not:
 ```{r echo = T}
 day.type <- with(orders, as.factor(order_dow == 0 | order_dow == 1))
-levels(daytype) <- c("Weekday", "Weekend")
+levels(day.type) <- c("Weekday", "Weekend")
 ggplot(orders, aes(order_hour_of_day, fill = day.type)) + labs(x = "Time of day") + geom_density(alpha = 0.2, adjust = 3)
 ```
 
@@ -280,5 +274,60 @@ This is obviously cut off at a maximum of 30 days, with any higher value countin
 ### Size of orders
 
 ```{r echo = T}
-ordersizes = count(opp, order_id)
+count(opp, order_id) %>% select(n) %>% summary()
+qplot(count(opp, order_id)$n, geom = "histogram", xlim = c(0,50), bins = 51, na.rm = T)
+```
+
+### How consistent are users with their order sizes?
+
+```{r echo = T}
+count(opp, order_id) %>% inner_join(orders) %>% select(user_id, n) %>% group_by(user_id) %>% summarize(sd = sd(n)) %>% select(sd) %>% summary()
+```
+So 50% of users have a standard deviation of their order size between 2.3 and 5.6, with the mean user standard deviation between 4.3. 
+
+## A better benchmark
+
+A better benchmark (than just giving bananas to everyone) would be to predict that a user buys a product if it appears in more than 50% of their other orders.
+
+First let's define a function which takes a `user_id` and outputs the desired output. 
+
+We want to use both the prior and training dataframes to compute the means.
+
+First let's look at a single example so we can work out how to do this. Let's look at user `178520`. 
+
+```{r echo = T}
+ord1 <- orders %>% filter(user_id == 178520) %>% select(order_id) %>% inner_join(opp) 
+n1 <- ord1 %>% distinct(order_id) %>% nrow()
+fracs1 <- ord1 %>% count(product_id) %>% mutate(frac = n/n1)
+```
+
+We see that very few of the products are chosen in over 50% of orders, so this seems to be quite conservative:
+```{r echo = T}
+qplot(fracs1$frac)
+```
+
+Actually there are six items orders over half the time:
+```{r echo = T}
+guess1 <- fracs1 %>% filter(frac >= 0.5)
+guess1 %>% inner_join(products) %>% select(frac, product_name)
+```
+
+So this person mostly buys breakfast supplies and energy drinks. 
+
+Let's put this as our guess for this one user:
+```{r echo = T}
+ans1 <- guess1$product_id %>% paste(collapse = " ")
+val1 <- orders %>% filter(eval_set == "train", user_id == 178520) %>% select(order_id) %>% mutate(products = ans1)
+val1
+```
+We can find the F1 score of this one example by running 
+```{r echo = T}
+f1order(2331095, ans1)
+```
+Which is not that bad; the Kaggle leaderboard is led (at the time of writing) by a score of 0.403.
+
+Now we need to apply the same manipulations automatically to the whole prior dataset. 
+
+```{r echo = T}
+practice <- data.frame(user_id = c(1,1,1,1,2,2,2,2,2), order_id = c(1,1,2,2,3,3,3,4,4), product_id = c(7,9,7,10,8,11,7,6,11))
 ```
