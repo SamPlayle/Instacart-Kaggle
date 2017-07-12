@@ -337,27 +337,313 @@ practice %>% group_by(user_id, product_id) %>% summarize(count = n()) %>% inner_
 ```
 
 ```{r echo = T}
-if(!file.exists("bench2.rds")){
 
-benchdat <- opp %>% inner_join(orders) %>% select(user_id, order_id, product_id)
+## Making a data frame listing the fraction of times a product appeared
+## in a user's order
 
+## The computation takes a bit of time so let's save the output
+
+if(!file.exists("orderfracs.rds")){
+##  
+## Link the prior orders to the order data to get user IDs
+##
+benchdat <- opp %>% inner_join(orders) %>% 
+  ##
+  ## Keep only the user_id, order_id and product_id columns
+  ##
+  select(user_id, order_id, product_id)
+##
+## Make a new data frame norders listing the number
+## of distinct orders for each user
+##
 norders <- benchdat %>% group_by(user_id) %>% summarize(number_orders = n_distinct(order_id))
+##
+## Make a new data frame listing which fraction of a user's
+## orders include a product.
+## First count the occurrences of each product
+##
+orderfracs <- benchdat %>% group_by(user_id, product_id) %>% summarize(count = n()) %>% 
+  ##
+  ## Then join to the data frame with the number of orders
+  ## per user and compute the fraction
+  ##
+  inner_join(norders) %>% mutate(frac = count/number_orders) %>% 
+  ##
+  ## Return only the fields we need
+  ##
+  select(user_id, product_id, frac) 
 
-bench2 <- benchdat %>% group_by(user_id, product_id) %>% summarize(count = n()) %>% inner_join(norders) %>% mutate(frac = count/number_orders) %>% select(user_id, product_id, frac) %>% filter(frac >= 0.5)
-
-saveRDS(bench2, file = "bench2.rds")
+saveRDS(orderfracs, file = "orderfracs.rds")
 } else {
-bench2 <- readRDS("bench2.rds")
+orderfracs <- readRDS("orderfracs.rds")
 }
+```
+
+```{r echo = T}
+bench2 <- orderfracs %>% filter(frac >= 0.5)
 ```
 
 Putting the data in the right form:
 
 ```{r echo = T}
-bench2form <- bench2 %>% group_by(user_id) %>% mutate(products = paste0(product_id, collapse = " ")) %>% select(user_id, products) %>% unique()
+filtered.to.form <- function(df){
+  df %>% group_by(user_id) %>% mutate(products = paste0(product_id, collapse = " ")) %>% select(user_id, products) %>% unique()
+}
+```
+
+```{r echo = T}
+bench2form <- filtered.to.form(bench2)
 ```
 
 Now we need to use this to get predictions
+
 ```{r echo = T}
-filter(orders, eval_set == "train") %>% left_join(bench2form) %>% select(order_id, products) %>% mutate(products = ifelse(is.na(products),"",products)) 
+form.to.train <- function(df){
+  filter(orders, eval_set == "train") %>% left_join(df) %>% select(order_id, products) %>% mutate(products = ifelse(is.na(products),"",products))
+}
 ```
+
+```{r echo = T}
+guesses1 <- form.to.train(bench2form)
+```
+
+Now we need to compare this to the `ground truth'. 
+
+First let's make a data frame containing the ground truth:
+```{r echo = T}
+groundtruth <- filter(orders, eval_set == "train") %>%  left_join(opt) %>% filter(reordered == 1) %>% select(order_id, product_id) %>% group_by(order_id) %>% mutate(truth = paste0(product_id, collapse = " ")) %>% select(order_id, truth) %>% unique()
+```
+
+Create some functions to compute the F1 score:
+```{r echo = T}
+string.ratio <- function(s1, s2){
+    mean( strsplit(s1, split = " ")[[1]] %in% strsplit(s2, split = " ")[[1]] )
+}
+
+f1strings <- function(s1, s2){
+  p = string.ratio(s1, s2)
+  r = string.ratio(s2, s1)
+  f1 = ifelse(p != 0 & r != 0,
+              2 * p * r / (p + r),
+              0)
+  f1
+}
+```
+
+```{r echo = T}
+train.to.f1 <- function(df){
+  groundtruth %>% inner_join(df) %>% mutate(f1 = f1strings(products, truth)) %>% select(order_id, f1) 
+}
+```
+
+```{r echo = T}
+f1scores <- train.to.f1(guesses1)
+mean(f1scores$f1)
+```
+
+So the score is about 27.9%, which is OK.
+
+Let's generate a prediction for the test dataset to submit to Kaggle. 
+```{r echo = T}
+# Let's make the data frame with the same pipeline as above
+
+guess1test <- filter(orders, eval_set == "test") %>% left_join(bench2form) %>% select(order_id, products) %>% mutate(products = ifelse(is.na(products),"None",products))
+
+write.csv(guess1test, file = "guess1.csv", quote = F, row.names = F)
+```
+which, when uploaded to Kaggle, gets a score of about 28.7%.
+
+## Finding the best cutoff
+
+Maybe it would be better to guess all items bought more than $q$ of the time were in a given basket, where $q$ is a fraction between 0 and 1. Let's compute and work out which fraction gives the highest score.
+
+```{r echo = T}
+if(!file.exists("scores.rds")){
+  scores <- NULL
+  for (i in 0:50){
+    print(i)
+    p <- 0.1 + i*0.01
+    pguess <- filter(orderfracs, frac >= p)
+    f1sc <- pguess %>% filtered.to.form() %>% form.to.train() %>% train.to.f1()
+    score <- mean(f1sc$f1)
+    scores <- c(scores, score)
+  }
+  } else {
+  scores <- readRDS("scores.rds")
+  }
+  pmax <- 0.1 + 0.01 * (0:50)[which(scores == max(scores))]
+  plot(0.1 + 0.01 * (0:50), scores, xlab = "Cutoff fraction")
+  abline(v = pmax)
+```
+
+## Uploading the test set with this cutoff
+
+```{r echo = T}
+# Let's make the data frame with the same pipeline as above
+
+prods.26 <- orderfracs %>% filter(frac >= 0.26) %>% filtered.to.form()
+
+test.26 <- filter(orders, eval_set == "test") %>% left_join(prods.26) %>% select(order_id, products) %>% mutate(products = ifelse(is.na(products),"None",products))
+
+write.csv(test.26, file = "cutoff26.csv", quote = F, row.names = F)
+```
+
+This gives a score on Kaggle of 0.3326.
+
+## A model taking into account time since previous order
+
+Let's make a model using **logistic regression** taking account of two predictors: the length of time since the previous order *and* the fraction of previous orders on which the item was bought.
+
+We need to get the data into a particular form to do this; we need to make a data frame with the following columns:
+
+ * `order_id`
+ * previous items ordered by the user
+ * fraction of previous orders the user bought this item
+ * how many days was it since the previous order?
+ * did the user buy it this time yes/no?
+ 
+Let's start by making a data frame which, for every order in the training set, lists all previous orders by the user and their probability.
+
+```{r echo = T}
+word.in.sentence <- function(word, sentence){
+    word %in% strsplit(sentence, split = " ")[[1]]
+}
+```
+
+```{r echo = T}
+if(!file.exists("prodsinorderdays.RDS")){
+trainordersdays <- orders %>% filter(eval_set == "train") %>% select(order_id, user_id, days_since_prior_order)
+
+trainordersprods <- opt %>% filter(reordered == 1) %>% group_by(order_id) %>% mutate(prods = paste0(product_id, collapse = " "))  %>% select(order_id, prods) %>% unique()
+
+prodsinorderdays <- trainordersdays %>% inner_join(orderfracs) %>% inner_join(trainordersprods) %>% group_by(order_id) %>% mutate(inorder = word.in.sentence(product_id, prods)) %>% data.frame()
+
+saveRDS(prodsinorderdays, "prodsinorderdays.RDS")
+} else {
+  prodsinorderdays <- readRDS("prodsinorderdays.rds")
+}
+
+head(prodsinorderdays)
+```
+
+Now we have the data frame in the form we need, let's train a logistic regression model with `days_since_prior_order` and `frac` as the covariates to predict `inorder`:
+```{r echo = T}
+if(!file.exists("dayfracfit.rds")){
+dayfracfit <- glm(inorder ~ frac + days_since_prior_order, data = prodsinorderdays, family = binomial)
+saveRDS(dayfracfit, "dayfracfit.rds")
+} else {
+  dayfracfit <- readRDS("dayfracfit.rds")
+}
+
+summary(dayfracfit)
+```
+
+Now, with this model trained, let us make predictions on the test dataset. We need to get a data frame which has the test order numbers with `frac` and `days_since_prior_order` as its columns. 
+```{r echo = T}
+testfracdaysdf <- orders %>% filter(eval_set == "test") %>% select(order_id, user_id, days_since_prior_order) %>% inner_join(orderfracs)
+
+predtestfracdays <- predict(dayfracfit, newdata = testfracdaysdf, type = "response")
+```
+
+Now, this model outputs an updated "probability" of a certain item being in an order which is an increasing function of the fraction of prior orders and a *decreasing* function of the time since the previous order was made --- the longer a user waits between orders, the *less* likely it is that they will buy something! Is this too simple? 
+
+```{r echo = T}
+df.days <- data.frame(days_since_prior_order = c(rep(1,101),rep(15,101),rep(30,101)), frac = 0.01 * 0:100)
+##
+## Add a new column using the model to predict the response
+##
+df.days$response <- predict(dayfracfit, newdata = df.days, type = "response")
+##
+##
+df.days$days_since_prior_order <- as.factor(df.days$days_since_prior_order) 
+##
+##
+##
+ggplot(df.days, aes(x = frac, y = response, colour = days_since_prior_order)) + geom_line(lwd = 2, alpha = 0.8)
+```
+
+As we saw in the case of using just `frac`, it isn't easy to predict where we should set the cutoff. But we know it should be for the value of frac equal to about 0.26; this corresponds to a value of the response variable around 0.126, depending on the length of time:
+```{r echo = T}
+predict(dayfracfit, newdata = data.frame(days_since_prior_order = c(1,15,30), frac = 0.26), type = "response")
+```
+So let's check some values in the region of 0.1 to 0.15. We'll use the training dataset again. We need to get a data frame with the order number, days since prior order, and `frac` variable.
+
+```{r echo = T}
+odpf <- orders %>% filter(eval_set == "train") %>% select(order_id, user_id, days_since_prior_order) %>% inner_join(orderfracs)
+
+odpf$response <- predict(dayfracfit, newdata = odpf, type = "response")
+```
+
+```{r echo = T}
+if(!file.exists("dayscores.rds")){
+  day.scores <- NULL
+  for(i in 0:20){
+    p <- 0.1 + 0.0025 * i
+    print(i)
+    prod.pred <- odpf %>% filter(response >= p) %>% group_by(order_id) %>% mutate(products = paste0(product_id, collapse = " ")) %>% select(order_id, products) %>% unique()
+    ##
+    ##
+    ##
+    f1.scores <- train.to.f1(prod.pred)
+    day.scores <- c(day.scores, mean(f1.scores$f1))
+  }
+  saveRDS(day.scores,"dayscores.RDS")
+} else {
+  day.scores <- readRDS("dayscores.rds")
+}
+
+if(!file.exists("dayscoresfine.rds")){
+  day.scores.fine <- NULL
+  for(i in 0:19){
+    p <- 0.125 + 0.00025 * i
+    print(i)
+    prod.pred <- odpf %>% filter(response >= p) %>% group_by(order_id) %>% mutate(products = paste0(product_id, collapse = " ")) %>% select(order_id, products) %>% unique()
+    ##
+    ##
+    ##
+    f1.scores <- train.to.f1(prod.pred)
+    day.scores.fine <- c(day.scores.fine, mean(f1.scores$f1))
+  }
+  saveRDS(day.scores.fine,"dayscoresfine.rds")
+} else {
+  day.scores.fine <- readRDS("dayscoresfine.rds")
+}
+```
+
+
+```{r echo = T}
+day.scores.df <- data.frame(cutoff = c(0.1 + 0.0025 * (0:20), 0.125 + 0.00025 * (0:19)), F1 = c(day.scores, day.scores.fine))
+
+best.cutoff = 0.128125
+
+ggplot(day.scores.df, aes(x = cutoff, y = F1)) + geom_line(lwd = 1) + geom_vline(xintercept = best.cutoff)
+```
+
+Using this model and this cutoff, let's predict the test dataset scores. First we need a data frame with the order numbers, fraction of prior purchases and the days since the previous purchase:
+```{r echo = T}
+test.odpf <- orders %>% filter(eval_set == "test") %>% select(order_id, user_id, days_since_prior_order) %>% inner_join(orderfracs)
+
+test.odpf$response <- predict(dayfracfit, newdata = test.odpf, type = "response")
+
+frac.day.pred <- test.odpf %>% filter(response >= best.cutoff) %>% group_by(order_id) %>% mutate(products = paste0(product_id, collapse = " ")) %>% select(order_id, products) %>% unique()
+
+frac.day.pred.all <- filter(orders, eval_set == "test") %>% left_join(frac.day.pred) %>% select(order_id, products) %>% mutate(products = ifelse(is.na(products),"None",products))
+
+write.csv(frac.day.pred.all, file = "fracdaypred.csv", quote = F, row.names = F)
+```
+
+This gives a score of 0.3321 --- slightly worse than the submission which *didn't* account for the number of days since the purchase occurred!
+
+Let's have a look at how the responses are spread out. There are too many so we'll pick 1/10000 of the data randomly:
+```{r echo = T}
+inplot <- as.logical(
+    rbinom(
+        n = nrow(prodsinorderdays), 
+        size = 1, 
+        prob = 0.0001
+    )
+)
+piodsmall <- prodsinorderdays %>% filter(inplot)
+plot(piodsmall$frac, 1* piodsmall$inorder)
+```
+
