@@ -13,6 +13,8 @@ knitr::opts_chunk$set(echo = TRUE)
 library(dplyr); library(ggplot2)
 ```
 
+!!Work in progress!!
+
 ## Introduction
 
 This analysis is based on Instacart's dataset of 3 million anonymized orders, which is discussed in a blog post here: https://tech.instacart.com/3-million-instacart-orders-open-sourced-d40d29ead6f2
@@ -98,137 +100,6 @@ head(products)
 
 There are 49,688 different products; for each one as well as a `product_id` we get a `product_name`, an `aisle_id` and a `department_id`.
 
-### Output
-
-Let's have a look at the sample submission to see what format our output should be in: 
-
-```{r echo = T}
-sampsub <- read.csv(file = "../Data/sample_submission.csv", stringsAsFactors = F)
-dim(sampsub)
-head(sampsub)
-```
-
-We see that there are 75,000 rows with two columns. The first column is the order ID; so the idea is that given the order ID we should predict which products are included (from among those that the customer has previously ordered). The ordered products should be given as a space-separated list. It's possible that no repeat products were ordered; in this case the submitted answer for "products"" should be "None". https://www.kaggle.com/c/instacart-market-basket-analysis#evaluation
-
-In the sample submission, every basket is identical.
-```{r echo = T}
-all(sampsub$products==sampsub$products[1])
-```
-
-Let's see what products are in the sample basket by subsetting the `products` dataframe to just the rows with these two product IDs: 
-```{r echo = T}
-sampbasket <- as.numeric(strsplit(sampsub$products[1],"\\ ")[[1]])
-
-products[
-  products[,"product_id"] %in% sampbasket
-  ,]
-```
-
-This explains why they chose the name "Going Bananas Benchmark"!
-
-The scores will be computed from the mean F1 score. This is defined as
-$$
-F_1 = 2 \cdot \frac{p \cdot r }{p + r} \, , 
-$$
-
-where $p$ is the *precision*, i.e. the number of correct product IDs divided by the number of product IDs submitted, and $r$ is the *recall*, i.e. the number of correct product IDs divided by the number of product IDs that there should have been.
-
-### Partitioning off a validation set
-
-Let's split a dataset off of the training set to give us an estimated out-of-sample error rate of our analysis. We should not use the validation set for any training or preliminary investigation. 
-
-Let's get the IDs of the orders that are in the training set, and sample 20% of them as a validation set.
-
-```{r echo = T}
-trainorders <- orders[(orders$eval_set=="train"),"order_id"]
-set.seed(9383)
-intrain <- as.logical(
-  rbinom(
-    n = length(trainorders), 
-    size = 1, 
-    prob = 0.8
-    )
-  )
-trainingIDs <- trainorders[intrain]
-validationIDs <- trainorders[!intrain]
-length(trainingIDs)
-length(validationIDs)
-```
-
-Now we can set up a function to evaluate how accurate our attempts are. Let's assign the "going bananas benchmark" to our validation set. 
-
-```{r echo = T}
-valsample <- data.frame(order_id = validationIDs, products = sampsub[1,2])
-valsample[,2] <- as.character(valsample[,2])
-head(valsample)
-```
-
-To evaluate this, we need to find the "ground truth" for our validation set. For each order number, we need to get a list of products which appear in that order *and* which are repeat orders. Let's write a function to do this:
-
-```{r echo = T}
-getrepeatbasket <- function(order_id){
-  orderprods <- opt[opt[,"order_id"]==order_id 
-                    & opt[,"reordered"],]
-  orderprods
-}
-
-listprods <- function(basket){
-  prodvec <- basket$product_id
-  spaced <- paste(prodvec, collapse = ' ')
-  spaced
-}
-
-orderprods <- function(order_id){
-  listprods(getrepeatbasket(order_id))
-}
-```
-
-This function takes as its arguments an order number and a prediction for which items will be contained in that order, and outputs the $F_1$ score of that prediction:
-
-```{r echo = R}
-f1order <- function(order_id, productguess){
-  pgsplit <- strsplit(productguess, split = " ")[[1]]
-  ptrue <- getrepeatbasket(order_id)$product_id
-  correct <- pgsplit %in% ptrue
-  p <- mean(correct)
-  r <- sum(correct) / length(ptrue)
-  ifelse(
-    p != 0 & r != 0,
-    2*p*r/(p+r),
-    0
-  )
-}
-```
-
-This function takes a data frame of order numbers and predicted products and outputs the mean $F_1$ score for the data frame.
-
-```{r echo = T}
-getf1 <- function(guessdf){
-  x <- NULL
-  for(i in 1:nrow(guessdf)){
-    # Uncomment for updates
-    # if(i %% 100 == 0) print(c(i, mean(x)))
-    f1 <- f1order(guessdf[[i,1]],guessdf[[i,2]])
-    x <- c(x, f1)
-  }
-  mean(x)
-}
-```
-
-Let's use the `getf1()` function on the validation set with the banana benchmark. The computation takes quite a long time so we will save the output after running it once. 
-
-```{r echo = T}
-if(!file.exists("validationbenchmark.rds")){
-  validationbenchmark <- getf1(valsample)
-  saveRDS(x, file = "validationbenchmark.rds")
-} else {
-  validationbenchmark <- readRDS("validationbenchmark.rds")
-}
-validationbenchmark
-```
-
-So the benchmark guess for the validation dataset is about 0.000521. On the other hand, the benchmark guess for the *test* dataset, available on the leaderboard at https://www.kaggle.com/c/instacart-market-basket-analysis/leaderboard , is 0.000545. These two scores are within 5% of each other, which is reassuring because it tells us that we are computing the $F_1$ score correctly, and that there is some consistent structure in the dataset for us to find as expected (i.e. the orders are not just random).
-
 ## Exploratory graphs
 
 ### Number of orders
@@ -285,6 +156,138 @@ count(opp, order_id) %>% inner_join(orders) %>% select(user_id, n) %>% group_by(
 ```
 So 50% of users have a standard deviation of their order size between 2.3 and 5.6, with the mean user standard deviation between 4.3. 
 
+## Benchmark dataset Output
+
+Let's have a look at the sample submission to see what format our output should be in: 
+
+```{r echo = T}
+sampsub <- read.csv(file = "../Data/sample_submission.csv", stringsAsFactors = F)
+dim(sampsub)
+head(sampsub)
+```
+
+We see that there are 75,000 rows with two columns. The first column is the order ID; so the idea is that given the order ID we should predict which products are included (from among those that the customer has previously ordered). The ordered products should be given as a space-separated list. It's possible that no repeat products were ordered; in this case the submitted answer for "products"" should be "None". https://www.kaggle.com/c/instacart-market-basket-analysis#evaluation
+
+In the sample submission, every basket is identical.
+```{r echo = T}
+all(sampsub$products==sampsub$products[1])
+```
+
+Let's see what products are in the sample basket by subsetting the `products` dataframe to just the rows with these two product IDs: 
+```{r echo = T}
+sampbasket <- as.numeric(strsplit(sampsub$products[1],"\\ ")[[1]])
+
+products %>% filter(product_id %in% sampbasket)
+```
+
+This explains why they chose the name "Going Bananas Benchmark"!
+
+### Partitioning off a validation set
+
+Let's split a dataset off of the training set to give us an estimated out-of-sample error rate of our analysis. We should not use the validation set for any training or preliminary investigation. 
+
+Let's get the IDs of the orders that are in the training set, and sample 20% of them as a validation set.
+
+```{r echo = T}
+trainorders <- orders %>% filter(eval_set=="train") %>% select(order_id)
+set.seed(9383)
+intrain <- as.logical(
+  rbinom(
+    n = nrow(trainorders), 
+    size = 1, 
+    prob = 0.8
+    )
+  )
+trainingIDs <- trainorders %>% filter(intrain)
+validationIDs <- trainorders %>% filter(!intrain)
+nrow(trainingIDs)
+nrow(validationIDs)
+```
+
+Now we can set up a function to evaluate how accurate our attempts are. Let's assign the "going bananas benchmark" to our validation set. 
+
+```{r echo = T}
+valsample <- data.frame(order_id = validationIDs, products = sampsub[1,2])
+valsample[,2] <- as.character(valsample[,2])
+head(valsample)
+```
+
+To evaluate this, we need to find the "ground truth" for our validation set. For each order number, we need to get a list of products which appear in that order *and* which are repeat orders. We can do this with the following pipeline
+
+```{r echo = T}
+##
+## Subset to training orders
+##
+groundtruth <- filter(orders, eval_set == "train") %>% 
+  ##
+  ## Join with the training data frame "opt"
+  ## to get the product IDs
+  ##
+  left_join(opt) %>% 
+  ##
+  ## Only consider reordered items;
+  ## only use order_id and product_id columns
+  ## 
+  filter(reordered == 1) %>% select(order_id, product_id) %>%
+  ##
+  ## Create a new column with a string listing
+  ## the products in each order
+  ##
+  group_by(order_id) %>% mutate(truth = paste0(product_id, collapse = " ")) %>% 
+  ##
+  ## Use only order_id and "truth" columns and delete
+  ## duplicate rows.
+  ##
+  select(order_id, truth) %>% unique() %>% data.frame()
+
+## Let's see what the data frame looks like
+
+tail(groundtruth)
+```
+
+## $F_1$ score
+
+The scores will be computed from the mean F1 score. This is defined as
+$$
+F_1 = 2 \cdot \frac{p \cdot r }{p + r} \, , 
+$$
+
+where $p$ is the *precision*, i.e. the number of correct product IDs divided by the number of product IDs submitted, and $r$ is the *recall*, i.e. the number of correct product IDs divided by the number of product IDs that there should have been. To compute these, let us notice that both of them can be obtained in similar ways. Given a list $G$ of predicted values and a list $T$ of true values, we have $p = |G \cap T| / |G|$ and $r = |G \cap T | / |T|$. We can compute these using R's `%in%` function. Using `G %in% T` we get a logical vector of length $|G|$ whose entries are equal to 1 for every entry in common between $G$ and $T$, and 0 otherwise, so `sum(G %in% T)` is equal to $|G \cap T |$ and thus `mean(G %in% T)` equals $p$. Similarly, `mean(G %in% T)`$= r$.
+
+Let's create some functions to compute the F1 score:
+```{r echo = T}
+string.ratio <- function(s1, s2){
+    mean( strsplit(s1, split = " ")[[1]] %in% strsplit(s2, split = " ")[[1]] )
+}
+
+f1strings <- function(s1, s2){
+  p = string.ratio(s1, s2)
+  r = string.ratio(s2, s1)
+  f1 = ifelse(p != 0 & r != 0,
+              2 * p * r / (p + r),
+              0)
+  f1
+}
+```
+
+Now, with our ground truth data frame and our functions to compute F1, we can write a function that takes a data frame of `order_id`s and predictions and outputs a data frame with a new column for the $F_1$ score of that prediction:
+
+```{r echo = T}
+pred.to.f1 <- function(df){
+  groundtruth %>% inner_join(df) %>% mutate(f1 = f1strings(products, truth)) %>% select(order_id, f1) 
+}
+```
+
+Let's use this to compute the $F_1$ score for the validation sample:
+
+```{r echo = T}
+mean(pred.to.f1(valsample)$f1)
+```
+
+So the benchmark guess for the validation dataset is about 0.000558. On the other hand, the benchmark guess for the *test* dataset, available on the leaderboard at https://www.kaggle.com/c/instacart-market-basket-analysis/leaderboard , is 0.000545. These two scores are within 3% of each other, which is reassuring because it tells us that we are computing the $F_1$ score correctly, and that there is some consistent structure in the dataset for us to find as expected (i.e. the orders are not just random).
+
+
+
 ## A better benchmark
 
 A better benchmark (than just giving bananas to everyone) would be to predict that a user buys a product if it appears in more than 50% of their other orders.
@@ -322,7 +325,7 @@ val1
 ```
 We can find the F1 score of this one example by running 
 ```{r echo = T}
-f1order(2331095, ans1)
+f1strings((groundtruth %>% filter(order_id == 2331095) %>% select(truth))[[1,1]], ans1)
 ```
 Which is not that bad; the Kaggle leaderboard is led (at the time of writing) by a score of 0.403.
 
@@ -337,7 +340,6 @@ practice %>% group_by(user_id, product_id) %>% summarize(count = n()) %>% inner_
 ```
 
 ```{r echo = T}
-
 ## Making a data frame listing the fraction of times a product appeared
 ## in a user's order
 
@@ -396,7 +398,6 @@ bench2form <- filtered.to.form(bench2)
 ```
 
 Now we need to use this to get predictions
-
 ```{r echo = T}
 form.to.train <- function(df){
   filter(orders, eval_set == "train") %>% left_join(df) %>% select(order_id, products) %>% mutate(products = ifelse(is.na(products),"",products))
@@ -409,35 +410,8 @@ guesses1 <- form.to.train(bench2form)
 
 Now we need to compare this to the `ground truth'. 
 
-First let's make a data frame containing the ground truth:
 ```{r echo = T}
-groundtruth <- filter(orders, eval_set == "train") %>%  left_join(opt) %>% filter(reordered == 1) %>% select(order_id, product_id) %>% group_by(order_id) %>% mutate(truth = paste0(product_id, collapse = " ")) %>% select(order_id, truth) %>% unique()
-```
-
-Create some functions to compute the F1 score:
-```{r echo = T}
-string.ratio <- function(s1, s2){
-    mean( strsplit(s1, split = " ")[[1]] %in% strsplit(s2, split = " ")[[1]] )
-}
-
-f1strings <- function(s1, s2){
-  p = string.ratio(s1, s2)
-  r = string.ratio(s2, s1)
-  f1 = ifelse(p != 0 & r != 0,
-              2 * p * r / (p + r),
-              0)
-  f1
-}
-```
-
-```{r echo = T}
-train.to.f1 <- function(df){
-  groundtruth %>% inner_join(df) %>% mutate(f1 = f1strings(products, truth)) %>% select(order_id, f1) 
-}
-```
-
-```{r echo = T}
-f1scores <- train.to.f1(guesses1)
+f1scores <- pred.to.f1(guesses1)
 mean(f1scores$f1)
 ```
 
@@ -464,7 +438,7 @@ if(!file.exists("scores.rds")){
     print(i)
     p <- 0.1 + i*0.01
     pguess <- filter(orderfracs, frac >= p)
-    f1sc <- pguess %>% filtered.to.form() %>% form.to.train() %>% train.to.f1()
+    f1sc <- pguess %>% filtered.to.form() %>% form.to.train() %>% pred.to.f1()
     score <- mean(f1sc$f1)
     scores <- c(scores, score)
   }
@@ -526,53 +500,68 @@ saveRDS(prodsinorderdays, "prodsinorderdays.RDS")
 head(prodsinorderdays)
 ```
 
-Now we have the data frame in the form we need, let's train a logistic regression model with `days_since_prior_order` and `frac` as the covariates to predict `inorder`:
+Now we have the data frame in the form we need, let's train a logistic regression model with `days_since_prior_order` and `frac` as the regressors. The model object is huge (4 Gb) and we only need the coefficients so we'll just save those and do the predictions manually instead of using R's `predict()` function. 
+
 ```{r echo = T}
-if(!file.exists("dayfracfit.rds")){
-dayfracfit <- glm(inorder ~ frac + days_since_prior_order, data = prodsinorderdays, family = binomial)
-saveRDS(dayfracfit, "dayfracfit.rds")
+if(!file.exists("dayfraccoefs.rds")){
+  if(!file.exists("dayfracfit.rds")){
+    dayfracfit <- glm(inorder ~ frac + days_since_prior_order, data = prodsinorderdays, family = binomial)
+    saveRDS(dayfracfit, "dayfracfit.rds")
+  } else {
+    dayfracfit <- readRDS("dayfracfit.rds")
+  }
+  dayfraccoefs <- summary(dayfracfit)$coef[,1]
+  saveRDS(dayfraccoefs, "dayfraccoefs.rds")
 } else {
-  dayfracfit <- readRDS("dayfracfit.rds")
+  dayfraccoefs <- readRDS("dayfraccoefs.rds")
 }
-
-summary(dayfracfit)
-```
-
-Now, with this model trained, let us make predictions on the test dataset. We need to get a data frame which has the test order numbers with `frac` and `days_since_prior_order` as its columns. 
-```{r echo = T}
-testfracdaysdf <- orders %>% filter(eval_set == "test") %>% select(order_id, user_id, days_since_prior_order) %>% inner_join(orderfracs)
-
-predtestfracdays <- predict(dayfracfit, newdata = testfracdaysdf, type = "response")
+dayfraccoefs
 ```
 
 Now, this model outputs an updated "probability" of a certain item being in an order which is an increasing function of the fraction of prior orders and a *decreasing* function of the time since the previous order was made --- the longer a user waits between orders, the *less* likely it is that they will buy something! Is this too simple? 
 
+Using these estimates of the regression coefficients, let's define a function to give the response for a given value of `frac` and `days_since_prior_order`. 
+
 ```{r echo = T}
-df.days <- data.frame(days_since_prior_order = c(rep(1,101),rep(15,101),rep(30,101)), frac = 0.01 * 0:100)
-##
-## Add a new column using the model to predict the response
-##
-df.days$response <- predict(dayfracfit, newdata = df.days, type = "response")
-##
+day.frac.response <- function(frac, days_since_prior_order){
+  linear = dayfraccoefs[1] + dayfraccoefs[2] * frac + dayfraccoefs[3] * days_since_prior_order
+  1 / (1 + exp(- linear))
+}
+```
+
+We can make a plot of the response as a function of `frac`, showing how it varies with the number of days---the impact of `days_since_prior_order` is small but not negligible.
+
+```{r echo = T}
+df.days <- data.frame(days_since_prior_order = c(rep(1,101),rep(15,101),rep(30,101)), frac = 0.01 * 0:100) %>% mutate(response = day.frac.response(frac, days_since_prior_order))
 ##
 df.days$days_since_prior_order <- as.factor(df.days$days_since_prior_order) 
-##
-##
 ##
 ggplot(df.days, aes(x = frac, y = response, colour = days_since_prior_order)) + geom_line(lwd = 2, alpha = 0.8)
 ```
 
+
+Now, with this model trained, let us make predictions on the test dataset. We need to get a data frame which has the test order numbers with `frac` and `days_since_prior_order` as its columns. 
+```{r echo = T}
+  predtestfracdays <- orders %>% filter(eval_set == "test") %>% select(order_id, user_id, days_since_prior_order) %>% inner_join(orderfracs) %>% mutate(response = day.frac.response(frac, days_since_prior_order))
+```
+
 As we saw in the case of using just `frac`, it isn't easy to predict where we should set the cutoff. But we know it should be for the value of frac equal to about 0.26; this corresponds to a value of the response variable around 0.126, depending on the length of time:
 ```{r echo = T}
-predict(dayfracfit, newdata = data.frame(days_since_prior_order = c(1,15,30), frac = 0.26), type = "response")
+if(!file.exists("predday26.rds")){
+  predday26 <- predict(dayfracfit, newdata = data.frame(days_since_prior_order = c(1,15,30), frac = 0.26), type = "response")
+  saveRDS(predday26, "predday26.rds")
+} else {
+  predday26 <- readRDS("predday26.rds")
+}
+predday26
 ```
 So let's check some values in the region of 0.1 to 0.15. We'll use the training dataset again. We need to get a data frame with the order number, days since prior order, and `frac` variable.
 
 ```{r echo = T}
-odpf <- orders %>% filter(eval_set == "train") %>% select(order_id, user_id, days_since_prior_order) %>% inner_join(orderfracs)
-
-odpf$response <- predict(dayfracfit, newdata = odpf, type = "response")
+odpf <- orders %>% filter(eval_set == "train") %>% select(order_id, user_id, days_since_prior_order) %>% inner_join(orderfracs) %>% mutate(response = day.frac.response(frac, days_since_prior_order))
 ```
+
+Using this, let's try different values of the cutoff, i.e. let's vary $p$, make the prediction that an item is in the cart if the response from the logistic regression is $\geq p$, and see which value of $p$ gives the best value of $F_1$.
 
 ```{r echo = T}
 if(!file.exists("dayscores.rds")){
@@ -584,7 +573,7 @@ if(!file.exists("dayscores.rds")){
     ##
     ##
     ##
-    f1.scores <- train.to.f1(prod.pred)
+    f1.scores <- pred.to.f1(prod.pred)
     day.scores <- c(day.scores, mean(f1.scores$f1))
   }
   saveRDS(day.scores,"dayscores.RDS")
@@ -601,7 +590,7 @@ if(!file.exists("dayscoresfine.rds")){
     ##
     ##
     ##
-    f1.scores <- train.to.f1(prod.pred)
+    f1.scores <- pred.to.f1(prod.pred)
     day.scores.fine <- c(day.scores.fine, mean(f1.scores$f1))
   }
   saveRDS(day.scores.fine,"dayscoresfine.rds")
@@ -611,39 +600,46 @@ if(!file.exists("dayscoresfine.rds")){
 ```
 
 
+We can plot our results:
+
 ```{r echo = T}
 day.scores.df <- data.frame(cutoff = c(0.1 + 0.0025 * (0:20), 0.125 + 0.00025 * (0:19)), F1 = c(day.scores, day.scores.fine))
-
+#
 best.cutoff = 0.128125
-
+#
 ggplot(day.scores.df, aes(x = cutoff, y = F1)) + geom_line(lwd = 1) + geom_vline(xintercept = best.cutoff)
 ```
 
-Using this model and this cutoff, let's predict the test dataset scores. First we need a data frame with the order numbers, fraction of prior purchases and the days since the previous purchase:
+The optimum cutoff for this response is thus `r best.cutoff`. 
+
+Using this model and this cutoff, let's make predictions for the test dataset and upload them to Kaggle.
 ```{r echo = T}
-test.odpf <- orders %>% filter(eval_set == "test") %>% select(order_id, user_id, days_since_prior_order) %>% inner_join(orderfracs)
+##
+## Make a data frame with test order_id's, frac and days_since_prior_order
+##
+test.odpf <- orders %>% filter(eval_set == "test") %>% select(order_id, user_id, days_since_prior_order) %>% inner_join(orderfracs) %>% 
+  ##
+  ## Predict the response
+  ##
+  mutate(response = day.frac.response(frac, days_since_prior_order))
+##
+## Subset to the products with scores above the cutoff
+##
+frac.day.pred <- test.odpf %>% filter(response >= best.cutoff) %>% 
+  ##
+  ## Put output in desired form
+  ##
+  group_by(order_id) %>% mutate(products = paste0(product_id, collapse = " ")) %>% select(order_id, products) %>% unique()
 
-test.odpf$response <- predict(dayfracfit, newdata = test.odpf, type = "response")
-
-frac.day.pred <- test.odpf %>% filter(response >= best.cutoff) %>% group_by(order_id) %>% mutate(products = paste0(product_id, collapse = " ")) %>% select(order_id, products) %>% unique()
-
+##
+## Make sure we have all order_id's from test set, setting "None"
+## if there are no products predictes
+##
 frac.day.pred.all <- filter(orders, eval_set == "test") %>% left_join(frac.day.pred) %>% select(order_id, products) %>% mutate(products = ifelse(is.na(products),"None",products))
-
+##
+## Output CSV in the required format
+##
 write.csv(frac.day.pred.all, file = "fracdaypred.csv", quote = F, row.names = F)
 ```
 
 This gives a score of 0.3321 --- slightly worse than the submission which *didn't* account for the number of days since the purchase occurred!
-
-Let's have a look at how the responses are spread out. There are too many so we'll pick 1/10000 of the data randomly:
-```{r echo = T}
-inplot <- as.logical(
-    rbinom(
-        n = nrow(prodsinorderdays), 
-        size = 1, 
-        prob = 0.0001
-    )
-)
-piodsmall <- prodsinorderdays %>% filter(inplot)
-plot(piodsmall$frac, 1* piodsmall$inorder)
-```
-
